@@ -18,7 +18,7 @@ pub enum HandleMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     // GetCount returns the current count as a json-encoded number
-    GetMemo { permit: String },
+    GetMemo { permit: Permit },
 }
 
 // We define a custom struct for each query response

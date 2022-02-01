@@ -1,5 +1,5 @@
-use cosmwasm_std::{debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdError, StdResult, Storage, HumanAddr};
-
+use secret_cosmwasm_std::{debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdError, StdResult, Storage, HumanAddr};
+use secret_toolkit::permit::{Permit, validate};
 use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
 use crate::state::{config, config_read, State, Message};
 
@@ -37,11 +37,6 @@ pub fn send_memo<S: Storage, A: Api, Q: Querier>(
     to: HumanAddr,
     message: String
 ) -> StdResult<HandleResponse> {
-    config(&mut deps.storage).update(|mut state| {
-        state.count += 1;
-        debug_print!("count = {}", state.count);
-        Ok(state)
-    })?;
 
     let msg = Message::new(env.message.sender, message, env.block.time);
     msg.store_message(&mut deps.storage, &to)?;
@@ -72,11 +67,11 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     msg: QueryMsg,
 ) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
+        QueryMsg::GetMemo { permit } => to_binary(&query_memo(deps, permit)?),
     }
 }
 
-fn query_count<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdResult<CountResponse> {
+fn query_memo<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, permit: Permit) -> StdResult<CountResponse> {
     let state = config_read(&deps.storage).load()?;
     Ok(CountResponse { count: state.count })
 }
