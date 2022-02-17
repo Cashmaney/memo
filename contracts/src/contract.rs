@@ -1,16 +1,17 @@
-use secret_cosmwasm_std::{debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdError, StdResult, Storage, HumanAddr};
-use secret_toolkit::permit::{Permit, validate};
-use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
-use crate::state::{config, config_read, State, Message};
+use cosmwasm_std::{debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdResult, Storage, HumanAddr, StdError, QueryRequest, WasmQuery};
+use secret_toolkit::permit::{Permission, validate};
+use secret_toolkit::viewing_key::{validate_key, store_key};
+use crate::msg::{MsgsResponse, HandleMsg, InitMsg, QueryMsg, ViewingPermissions};
+use crate::state::{config, State, Message, config_read, PERFIX_PERMITS};
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    msg: InitMsg,
+    _msg: InitMsg,
 ) -> StdResult<InitResponse> {
     let state = State {
-        count: msg.count,
         owner: deps.api.canonical_address(&env.message.sender)?,
+        contract: env.contract.address
     };
 
     config(&mut deps.storage).save(&state)?;
@@ -27,8 +28,20 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<HandleResponse> {
     match msg {
         HandleMsg::SendMemo { to, message } => send_memo(deps, env, to, message),
-        HandleMsg::Reset { count } => try_reset(deps, env, count),
+        HandleMsg::SetViewingKey { key, .. } => create_key(deps, env, key),
     }
+}
+
+pub fn create_key<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    key: String,
+) -> StdResult<HandleResponse> {
+
+    store_key(&mut deps.storage, key, &env.message.sender);
+
+    debug_print(format!("key stored successfully for {}", env.message.sender));
+    Ok(HandleResponse::default())
 }
 
 pub fn send_memo<S: Storage, A: Api, Q: Querier>(
@@ -38,111 +51,177 @@ pub fn send_memo<S: Storage, A: Api, Q: Querier>(
     message: String
 ) -> StdResult<HandleResponse> {
 
-    let msg = Message::new(env.message.sender, message, env.block.time);
+    let msg = Message::new(env.message.sender.clone(), message, env.block.time);
+
+
+
     msg.store_message(&mut deps.storage, &to)?;
 
     debug_print(format!("message stored successfully to {}", to));
     Ok(HandleResponse::default())
 }
 
-pub fn try_reset<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    count: i32,
-) -> StdResult<HandleResponse> {
-    let sender_address_raw = deps.api.canonical_address(&env.message.sender)?;
-    config(&mut deps.storage).update(|mut state| {
-        if sender_address_raw != state.owner {
-            return Err(StdError::Unauthorized { backtrace: None });
-        }
-        state.count = count;
-        Ok(state)
-    })?;
-    debug_print("count reset successfully");
-    Ok(HandleResponse::default())
-}
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     msg: QueryMsg,
 ) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetMemo { permit } => to_binary(&query_memo(deps, permit)?),
+        QueryMsg::GetMemo {
+            address,
+            auth,
+            page,
+            page_size } => to_binary(&query_memo(deps, address, auth, page, page_size)?),
     }
 }
 
-fn query_memo<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, permit: Permit) -> StdResult<CountResponse> {
-    let state = config_read(&deps.storage).load()?;
-    Ok(CountResponse { count: state.count })
+fn query_memo<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    address: HumanAddr,
+    auth: ViewingPermissions,
+    page: Option<u32>,
+    page_size: Option<u32>
+) -> StdResult<MsgsResponse> {
+
+    let contract_address = config_read(&deps.storage).load()?.contract;
+
+    let mut msgs = vec![];
+
+    if let Some(key) = auth.key {
+        if validate_key(&deps.storage, key, &address) {
+            msgs = Message::get_messages(&deps.storage, &address, page.unwrap_or(0), page_size.unwrap_or(10))?.0;
+        } else {
+            return Err(StdError::unauthorized());
+        }
+    } else if let Some(permit) = auth.permit {
+
+        if !permit.check_token(&contract_address) {
+            return Err(StdError::generic_err("Permit not signed for this contract"));
+        }
+
+        if !permit.check_permission(&Permission::History) && !permit.check_permission(&Permission::Owner) {
+            return Err(StdError::generic_err("Permit does not have correct permissions"));
+        }
+
+        if validate(deps, PERFIX_PERMITS, &permit, contract_address)? != address {
+            return Err(StdError::generic_err("Permit invalid"));
+        }
+
+        msgs = Message::get_messages(&deps.storage, &address, page.unwrap_or(0), page_size.unwrap_or(10))?.0;
+
+    }
+
+
+    Ok(MsgsResponse { msgs })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-    use cosmwasm_std::{coins, from_binary, StdError};
+    use cosmwasm_std::{coins, from_binary};
 
     #[test]
-    fn proper_initialization() {
+    fn contract_init() {
         let mut deps = mock_dependencies(20, &[]);
 
-        let msg = InitMsg { count: 17 };
+        let msg = InitMsg { owner: None };
         let env = mock_env("creator", &coins(1000, "earth"));
 
         // we can just call .unwrap() to assert this was a success
         let res = init(&mut deps, env, msg).unwrap();
         assert_eq!(0, res.messages.len());
-
-        // it worked, let's query the state
-        let res = query(&deps, QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
     }
 
     #[test]
-    fn increment() {
+    fn create_key() {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
-        let msg = InitMsg { count: 17 };
+        let msg = InitMsg { owner: None };
+        let env = mock_env("creator", &coins(2, "token"));
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let env = mock_env("anyone", &coins(2, "token"));
+        let msg = HandleMsg::SetViewingKey { key: "yoyo".to_string(), padding: None };
+        let res = handle(&mut deps, env, msg).unwrap();
+
+        assert_eq!(0, res.messages.len());
+    }
+
+    #[test]
+    fn send_message() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let msg = InitMsg { owner: None };
         let env = mock_env("creator", &coins(2, "token"));
         let _res = init(&mut deps, env, msg).unwrap();
 
         // anyone can increment
         let env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::Increment {};
-        let _res = handle(&mut deps, env, msg).unwrap();
+        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let res = handle(&mut deps, env, msg).unwrap();
 
-        // should increase counter by 1
-        let res = query(&deps, QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
+        assert_eq!(0, res.messages.len());
     }
 
     #[test]
-    fn reset() {
+    fn read_message() {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
-        let msg = InitMsg { count: 17 };
+        let msg = InitMsg { owner: None };
         let env = mock_env("creator", &coins(2, "token"));
         let _res = init(&mut deps, env, msg).unwrap();
 
-        // not anyone can reset
-        let unauth_env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::Reset { count: 5 };
-        let res = handle(&mut deps, unauth_env, msg);
-        match res {
-            Err(StdError::Unauthorized { .. }) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = HandleMsg::SetViewingKey { key: "yoyo".to_string(), padding: None };
+        let _res = handle(&mut deps, env, msg).unwrap();
 
-        // only the original creator can reset the counter
-        let auth_env = mock_env("creator", &coins(2, "token"));
-        let msg = HandleMsg::Reset { count: 5 };
-        let _res = handle(&mut deps, auth_env, msg).unwrap();
+        // anyone can increment
+        let env = mock_env("anyone", &coins(2, "token"));
+        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let res = handle(&mut deps, env, msg).unwrap();
 
-        // should now be 5
-        let res = query(&deps, QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
+        assert_eq!(0, res.messages.len());
+
+        let res = query(&deps, QueryMsg::GetMemo {
+            address: HumanAddr("creator".to_string()),
+            auth: ViewingPermissions {
+                permit: None,
+                key: Some("yoyo".to_string())
+            },
+            page: None,
+            page_size: None
+        }).unwrap();
+        let value: MsgsResponse = from_binary(&res).unwrap();
+        assert_eq!(value.msgs.len(), 1);
+        assert_eq!(value.msgs[0].message, "hello world".to_string());
+
+    }
+
+
+    #[test]
+    fn read_message_fail() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let msg = InitMsg { owner: None };
+        let env = mock_env("creator", &coins(2, "token"));
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        // anyone can increment
+        let env = mock_env("anyone", &coins(2, "token"));
+        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let _res = handle(&mut deps, env, msg).unwrap();
+
+        let res = query(&deps, QueryMsg::GetMemo {
+            address: HumanAddr("creator".to_string()),
+            auth: ViewingPermissions {
+                permit: None,
+                key: Some("yoyo".to_string())
+            },
+            page: None,
+            page_size: None
+        });
+        // let value: StdResult<MsgsResponse> = from_binary(&res);
+        assert_eq!(res.is_err(), true);
     }
 }

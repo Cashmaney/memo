@@ -5,14 +5,15 @@ use cosmwasm_std::{CanonicalAddr, Storage, HumanAddr, StdResult, ReadonlyStorage
 use cosmwasm_storage::{singleton, singleton_read, ReadonlySingleton, Singleton, PrefixedStorage, ReadonlyPrefixedStorage};
 use secret_toolkit::storage::{AppendStore, AppendStoreMut};
 
-
+const MAX_LENGTH: u16 = 280;
 pub static CONFIG_KEY: &[u8] = b"config";
-const PREFIX_TXS: &[u8] = b"transactions";
+const PREFIX_MSGS: &[u8] = b"transactions";
+pub const PERFIX_PERMITS: &str = "revoked_permits";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct State {
-    pub count: i32,
     pub owner: CanonicalAddr,
+    pub contract: HumanAddr
 }
 
 pub fn config<S: Storage>(storage: &mut S) -> Singleton<S, State> {
@@ -23,7 +24,8 @@ pub fn config_read<S: Storage>(storage: &S) -> ReadonlySingleton<S, State> {
     singleton_read(storage, CONFIG_KEY)
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+
+#[derive(Serialize, Deserialize, JsonSchema, PartialEq, Clone, Debug)]
 pub struct Message {
     pub from: HumanAddr,
     pub message: String,
@@ -39,8 +41,12 @@ impl Message {
         }
     }
 
+    pub fn validate(&self) -> bool {
+        return self.message.len() <= usize::from(MAX_LENGTH);
+    }
+
     pub fn store_message<S: Storage>(&self, store: &mut S, to: &HumanAddr) -> StdResult<()> {
-        append_tx(store, &self, to)
+        append_msg(store, &self, to)
     }
 
     pub fn get_messages<S: ReadonlyStorage>(
@@ -50,7 +56,7 @@ impl Message {
         page_size: u32,
     ) -> StdResult<(Vec<Self>, u64)> {
         let store = ReadonlyPrefixedStorage::multilevel(
-            &[PREFIX_TXS, for_address.to.0.as_bytes()],
+            &[PREFIX_MSGS, for_address.0.as_bytes()],
             storage
         );
 
@@ -72,39 +78,18 @@ impl Message {
             .take(page_size as _);
 
         let txs: StdResult<Vec<Message>> = tx_iter
-            .map(|tx| tx.map(|tx| tx.into_humanized(api)).and_then(|x| x))
+            .map(|tx| tx)
             .collect();
         txs.map(|txs| (txs, store.len() as u64))
     }
 }
 
-// #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
-// struct InternalTx {
-//     pub from: HumanAddr,
-//     pub message: String,
-//     pub block_time: u64
-// }
-//
-// impl From<&Tx> for InternalTx {
-//     fn from(other: &Tx) -> Self {
-//         Self {
-//             from: other.from.clone(),
-//             message: other.message.clone(),
-//             block_time: other.block_time.clone()
-//         }
-//     }
-// }
-
-fn append_tx<S: Storage>(
+fn append_msg<S: Storage>(
     store: &mut S,
-    tx: &Message,
-    to: &HumanAddr
+    msg: &Message,
+    for_address: &HumanAddr,
 ) -> StdResult<()> {
-    let mut store = PrefixedStorage::multilevel(&[PREFIX_TXS, to.0.as_bytes()], store);
+    let mut store = PrefixedStorage::multilevel(&[PREFIX_MSGS, for_address.0.as_bytes()], store);
     let mut store = AppendStoreMut::attach_or_create(&mut store)?;
-
-    // let int_tx = InternalTx::from(tx);
-
-    store.push(&tx)
+    store.push(msg)
 }
-

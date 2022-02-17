@@ -15,7 +15,7 @@ Use this command to compile your contracts:
 
 # Run script
 
-`polar run scripts/sample-script.js`
+`polar run scripts/deploy.js`
 
 # Deploying contracts
 

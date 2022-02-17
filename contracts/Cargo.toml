@@ -1,6 +1,6 @@
 [package]
-name = "sample-project"
-version = "0.1.0"
+name = "memo"
+version = "1.0.0"
 authors = ["{{authors}}"]
 edition = "2018"
 
@@ -20,10 +20,10 @@ default = []
 
 
 [dependencies]
-secret-cosmwasm-std = "0.10.0"
-secret-cosmwasm-storage = { version = "0.10.0" }
-secret-toolkit = { version = "0.2.0", features = ["permit"] }
-
+cosmwasm-std = { package = "secret-cosmwasm-std", version = "0.10" }
+cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "0.10" }
+secret-toolkit = { path="../../secret-toolkit/packages/toolkit", features = ["permit", "viewing-key"] }
+cosmwasm-schema = { package = "cosmwasm-schema", version = "0.10" }
 schemars = "0.7"
 serde = { version = "1.0.103", default-features = false, features = ["derive"] }
 snafu = { version = "0.6.3" }

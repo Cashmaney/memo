@@ -1,8 +1,8 @@
 const accounts = [
   {
     name: 'account_0',
-    address: 'secret1l0g5czqw7vjvd20ezlk4x7ndgyn0rx5aumr8gk',
-    mnemonic: 'snack cable erode art lift better october drill hospital clown erase address'
+    address: 'secret1nmjq4cqdwr9d68nun3kkxr9h2z5l5u03ypmyk2',
+    mnemonic: 'hood endorse primary mixed camera piece agree chimney upgrade album blade alcohol reunion forget invite squeeze general bench aerobic happy saddle off buddy soccer'
   },
   {
     name: 'account_1',
@@ -14,7 +14,8 @@ const accounts = [
 module.exports = {
   networks: {
     default: {
-      endpoint: 'http://localhost:1337/'
+      endpoint: 'http://localhost:1337/',
+      accounts: accounts,
     },
     development: {
       endpoint: 'tcp://0.0.0.0:26656',
@@ -25,8 +26,8 @@ module.exports = {
     },
     // Supernova Testnet
     testnet: {
-      endpoint: 'http://bootstrap.supernova.enigma.co:1317',
-      chainId: 'supernova-2',
+      endpoint: 'http://20.127.18.96:1317',
+      chainId: 'pulsar-2',
       trustNode: true,
       keyringBackend: 'test',
       accounts: accounts,
