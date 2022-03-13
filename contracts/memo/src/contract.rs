@@ -1,8 +1,12 @@
-use cosmwasm_std::{debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdResult, Storage, HumanAddr, StdError, QueryRequest, WasmQuery};
-use secret_toolkit::permit::{Permission, validate};
-use secret_toolkit::viewing_key::{validate_key, store_key};
-use crate::msg::{MsgsResponse, HandleMsg, InitMsg, QueryMsg, ViewingPermissions};
-use crate::state::{config, State, Message, config_read, PERFIX_PERMITS};
+use crate::msg::{HandleMsg, InitMsg, MsgsResponse, QueryMsg, ViewingPermissions};
+use crate::state::{config, config_read, Message, State, PERFIX_PERMITS};
+use bech32;
+use cosmwasm_std::{
+    debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, HumanAddr, InitResponse,
+    Querier, QueryRequest, StdError, StdResult, Storage, WasmQuery,
+};
+use secret_toolkit::permit::{validate, Permission};
+use secret_toolkit::viewing_key::{store_key, validate_key};
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -11,7 +15,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<InitResponse> {
     let state = State {
         owner: deps.api.canonical_address(&env.message.sender)?,
-        contract: env.contract.address
+        contract: env.contract.address,
     };
 
     config(&mut deps.storage).save(&state)?;
@@ -37,10 +41,12 @@ pub fn create_key<S: Storage, A: Api, Q: Querier>(
     env: Env,
     key: String,
 ) -> StdResult<HandleResponse> {
-
     store_key(&mut deps.storage, key, &env.message.sender);
 
-    debug_print(format!("key stored successfully for {}", env.message.sender));
+    debug_print(format!(
+        "key stored successfully for {}",
+        env.message.sender
+    ));
     Ok(HandleResponse::default())
 }
 
@@ -48,19 +54,14 @@ pub fn send_memo<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     to: HumanAddr,
-    message: String
+    message: String,
 ) -> StdResult<HandleResponse> {
-
     let msg = Message::new(env.message.sender.clone(), message, env.block.time);
-
-
-
     msg.store_message(&mut deps.storage, &to)?;
 
     debug_print(format!("message stored successfully to {}", to));
     Ok(HandleResponse::default())
 }
-
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
@@ -71,7 +72,8 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
             address,
             auth,
             page,
-            page_size } => to_binary(&query_memo(deps, address, auth, page, page_size)?),
+            page_size,
+        } => to_binary(&query_memo(deps, address, auth, page, page_size)?),
     }
 }
 
@@ -80,39 +82,57 @@ fn query_memo<S: Storage, A: Api, Q: Querier>(
     address: HumanAddr,
     auth: ViewingPermissions,
     page: Option<u32>,
-    page_size: Option<u32>
+    page_size: Option<u32>,
 ) -> StdResult<MsgsResponse> {
-
     let contract_address = config_read(&deps.storage).load()?.contract;
+
+    let hrp: String = bech32::decode(address.as_str())
+        .map_err(|_| StdError::generic_err("Permit not signed for this contract"))?
+        .0;
 
     let mut msgs = vec![];
 
     if let Some(key) = auth.key {
         if validate_key(&deps.storage, key, &address) {
-            msgs = Message::get_messages(&deps.storage, &address, page.unwrap_or(0), page_size.unwrap_or(10))?.0;
+            msgs = Message::get_messages(
+                &deps.storage,
+                &address,
+                page.unwrap_or(0),
+                page_size.unwrap_or(10),
+            )?
+            .0;
         } else {
             return Err(StdError::unauthorized());
         }
     } else if let Some(permit) = auth.permit {
-
         if !permit.check_token(&contract_address) {
             return Err(StdError::generic_err("Permit not signed for this contract"));
         }
 
-        if !permit.check_permission(&Permission::History) && !permit.check_permission(&Permission::Owner) {
-            return Err(StdError::generic_err("Permit does not have correct permissions"));
+        if !permit.check_permission(&Permission::History)
+            && !permit.check_permission(&Permission::Owner)
+        {
+            return Err(StdError::generic_err(
+                "Permit does not have correct permissions",
+            ));
         }
 
-        if validate(deps, PERFIX_PERMITS, &permit, contract_address)? != address {
+        if validate(deps, PERFIX_PERMITS, &permit, contract_address, Some(&hrp))? != address.0 {
             return Err(StdError::generic_err("Permit invalid"));
         }
 
-        msgs = Message::get_messages(&deps.storage, &address, page.unwrap_or(0), page_size.unwrap_or(10))?.0;
-
+        msgs = Message::get_messages(
+            &deps.storage,
+            &address,
+            page.unwrap_or(0),
+            page_size.unwrap_or(10),
+        )?
+        .0;
     }
 
+    let length = Message::len(&deps.storage, &address);
 
-    Ok(MsgsResponse { msgs })
+    Ok(MsgsResponse { msgs, length })
 }
 
 #[cfg(test)]
@@ -142,7 +162,10 @@ mod tests {
         let _res = init(&mut deps, env, msg).unwrap();
 
         let env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::SetViewingKey { key: "yoyo".to_string(), padding: None };
+        let msg = HandleMsg::SetViewingKey {
+            key: "yoyo".to_string(),
+            padding: None,
+        };
         let res = handle(&mut deps, env, msg).unwrap();
 
         assert_eq!(0, res.messages.len());
@@ -158,7 +181,10 @@ mod tests {
 
         // anyone can increment
         let env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let msg = HandleMsg::SendMemo {
+            to: HumanAddr("creator".to_string()),
+            message: "hello world".to_string(),
+        };
         let res = handle(&mut deps, env, msg).unwrap();
 
         assert_eq!(0, res.messages.len());
@@ -173,31 +199,39 @@ mod tests {
         let _res = init(&mut deps, env, msg).unwrap();
 
         let env = mock_env("creator", &coins(2, "token"));
-        let msg = HandleMsg::SetViewingKey { key: "yoyo".to_string(), padding: None };
+        let msg = HandleMsg::SetViewingKey {
+            key: "yoyo".to_string(),
+            padding: None,
+        };
         let _res = handle(&mut deps, env, msg).unwrap();
 
         // anyone can increment
         let env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let msg = HandleMsg::SendMemo {
+            to: HumanAddr("creator".to_string()),
+            message: "hello world".to_string(),
+        };
         let res = handle(&mut deps, env, msg).unwrap();
 
         assert_eq!(0, res.messages.len());
 
-        let res = query(&deps, QueryMsg::GetMemo {
-            address: HumanAddr("creator".to_string()),
-            auth: ViewingPermissions {
-                permit: None,
-                key: Some("yoyo".to_string())
+        let res = query(
+            &deps,
+            QueryMsg::GetMemo {
+                address: HumanAddr("creator".to_string()),
+                auth: ViewingPermissions {
+                    permit: None,
+                    key: Some("yoyo".to_string()),
+                },
+                page: None,
+                page_size: None,
             },
-            page: None,
-            page_size: None
-        }).unwrap();
+        )
+        .unwrap();
         let value: MsgsResponse = from_binary(&res).unwrap();
         assert_eq!(value.msgs.len(), 1);
         assert_eq!(value.msgs[0].message, "hello world".to_string());
-
     }
-
 
     #[test]
     fn read_message_fail() {
@@ -209,18 +243,24 @@ mod tests {
 
         // anyone can increment
         let env = mock_env("anyone", &coins(2, "token"));
-        let msg = HandleMsg::SendMemo { to: HumanAddr("creator".to_string()), message: "hello world".to_string() };
+        let msg = HandleMsg::SendMemo {
+            to: HumanAddr("creator".to_string()),
+            message: "hello world".to_string(),
+        };
         let _res = handle(&mut deps, env, msg).unwrap();
 
-        let res = query(&deps, QueryMsg::GetMemo {
-            address: HumanAddr("creator".to_string()),
-            auth: ViewingPermissions {
-                permit: None,
-                key: Some("yoyo".to_string())
+        let res = query(
+            &deps,
+            QueryMsg::GetMemo {
+                address: HumanAddr("creator".to_string()),
+                auth: ViewingPermissions {
+                    permit: None,
+                    key: Some("yoyo".to_string()),
+                },
+                page: None,
+                page_size: None,
             },
-            page: None,
-            page_size: None
-        });
+        );
         // let value: StdResult<MsgsResponse> = from_binary(&res);
         assert_eq!(res.is_err(), true);
     }

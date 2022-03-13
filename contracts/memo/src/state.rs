@@ -49,6 +49,26 @@ impl Message {
         append_msg(store, &self, to)
     }
 
+    pub fn len<S: ReadonlyStorage>(storage: &S,
+                                   for_address: &HumanAddr) -> u32 {
+        let store = ReadonlyPrefixedStorage::multilevel(
+            &[PREFIX_MSGS, for_address.0.as_bytes()],
+            storage
+        );
+        let store = AppendStore::<Message, _, _>::attach(&store);
+        let store = if let Some(result) = store {
+            if result.is_err() {
+                return 0;
+            } else {
+                result.unwrap()
+            }
+        } else {
+            return 0;
+        };
+
+        return store.len();
+    }
+
     pub fn get_messages<S: ReadonlyStorage>(
         storage: &S,
         for_address: &HumanAddr,

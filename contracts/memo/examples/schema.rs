@@ -3,12 +3,12 @@ use std::fs::create_dir_all;
 
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 
-use memo::msg::{MsgsResponse, HandleMsg, InitMsg, QueryMsg};
+use memo::msg::{HandleMsg, InitMsg, MsgsResponse, QueryMsg};
 use memo::state::State;
 
 fn main() {
     let mut out_dir = current_dir().unwrap();
-    out_dir.push("schema");
+    out_dir.push("../schema");
     create_dir_all(&out_dir).unwrap();
     remove_schemas(&out_dir).unwrap();
 
