@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MsgsResponse",
+  "type": "object",
+  "required": [
+    "length",
+    "msgs"
+  ],
+  "properties": {
+    "length": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "msgs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Message"
+      }
+    }
+  },
+  "definitions": {
+    "HumanAddr": {
+      "type": "string"
+    },
+    "Message": {
+      "type": "object",
+      "required": [
+        "block_time",
+        "from",
+        "message"
+      ],
+      "properties": {
+        "block_time": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "from": {
+          "$ref": "#/definitions/HumanAddr"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

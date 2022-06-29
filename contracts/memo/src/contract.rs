@@ -3,10 +3,10 @@ use crate::state::{config, config_read, Message, State, PERFIX_PERMITS};
 use bech32;
 use cosmwasm_std::{
     debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, HumanAddr, InitResponse,
-    Querier, QueryRequest, StdError, StdResult, Storage, WasmQuery,
+    Querier, StdError, StdResult, Storage,
 };
-use secret_toolkit::permit::{validate, Permission};
-use secret_toolkit::viewing_key::{store_key, validate_key};
+use secret_toolkit::permit::{validate, TokenPermissions};
+use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -41,7 +41,7 @@ pub fn create_key<S: Storage, A: Api, Q: Querier>(
     env: Env,
     key: String,
 ) -> StdResult<HandleResponse> {
-    store_key(&mut deps.storage, key, &env.message.sender);
+    ViewingKey::set(&mut deps.storage, &env.message.sender, &key);
 
     debug_print(format!(
         "key stored successfully for {}",
@@ -93,24 +93,21 @@ fn query_memo<S: Storage, A: Api, Q: Querier>(
     let mut msgs = vec![];
 
     if let Some(key) = auth.key {
-        if validate_key(&deps.storage, key, &address) {
-            msgs = Message::get_messages(
-                &deps.storage,
-                &address,
-                page.unwrap_or(0),
-                page_size.unwrap_or(10),
-            )?
-            .0;
-        } else {
-            return Err(StdError::unauthorized());
-        }
+        ViewingKey::check(&deps.storage, &address, &key).map_err(|_| StdError::unauthorized())?;
+        msgs = Message::get_messages(
+            &deps.storage,
+            &address,
+            page.unwrap_or(0),
+            page_size.unwrap_or(10),
+        )?
+        .0;
     } else if let Some(permit) = auth.permit {
         if !permit.check_token(&contract_address) {
             return Err(StdError::generic_err("Permit not signed for this contract"));
         }
 
-        if !permit.check_permission(&Permission::History)
-            && !permit.check_permission(&Permission::Owner)
+        if !permit.check_permission(&TokenPermissions::History)
+            && !permit.check_permission(&TokenPermissions::Owner)
         {
             return Err(StdError::generic_err(
                 "Permit does not have correct permissions",

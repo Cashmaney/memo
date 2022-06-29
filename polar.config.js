@@ -26,7 +26,7 @@ module.exports = {
     },
     // Supernova Testnet
     testnet: {
-      endpoint: 'http://20.127.18.96:1317',
+      endpoint: 'http://40.88.137.151:1317',
       chainId: 'pulsar-2',
       trustNode: true,
       keyringBackend: 'test',
